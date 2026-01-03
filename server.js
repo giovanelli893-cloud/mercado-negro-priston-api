@@ -135,6 +135,96 @@ app.get("/me", authMiddleware, async (req, res) => {
     return res.status(500).json({ error: "server_error", detail: String(e.message || e) });
   }
 });
+// =========================
+// AUTH: register / login
+// =========================
+
+// helper: valida username (simples e direto)
+function normalizeUsername(u) {
+  return String(u || "").trim();
+}
+
+// REGISTER
+app.post("/auth/register", async (req, res) => {
+  try {
+    const username = normalizeUsername(req.body?.username);
+    const password = String(req.body?.password || "");
+
+    if (!username || !password) {
+      return res.status(400).json({ error: "username e password são obrigatórios" });
+    }
+    if (username.length > 40) {
+      return res.status(400).json({ error: "username máximo 40 caracteres" });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: "senha mínimo 6 caracteres" });
+    }
+
+    // checa se já existe
+    const exists = await pool.query(
+      "select 1 from app_user where username = $1 limit 1",
+      [username]
+    );
+    if (exists.rowCount > 0) {
+      return res.status(409).json({ error: "username já existe" });
+    }
+
+    const password_hash = await bcrypt.hash(password, 10);
+
+    const created = await pool.query(
+      `insert into app_user (username, password_hash)
+       values ($1, $2)
+       returning id, username, created_at`,
+      [username, password_hash]
+    );
+
+    return res.status(201).json({ user: created.rows[0] });
+  } catch (e) {
+    console.error("REGISTER ERROR:", e);
+    return res.status(500).json({ error: "erro interno" });
+  }
+});
+
+// LOGIN
+app.post("/auth/login", async (req, res) => {
+  try {
+    const username = normalizeUsername(req.body?.username);
+    const password = String(req.body?.password || "");
+
+    if (!username || !password) {
+      return res.status(400).json({ error: "username e password são obrigatórios" });
+    }
+
+    const q = await pool.query(
+      "select id, username, password_hash from app_user where username = $1 limit 1",
+      [username]
+    );
+
+    if (q.rowCount === 0) {
+      return res.status(401).json({ error: "credenciais inválidas" });
+    }
+
+    const user = q.rows[0];
+    const ok = await bcrypt.compare(password, user.password_hash);
+    if (!ok) {
+      return res.status(401).json({ error: "credenciais inválidas" });
+    }
+
+    const token = jwt.sign(
+      { sub: user.id, username: user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: "30d" }
+    );
+
+    return res.json({
+      token,
+      user: { id: user.id, username: user.username }
+    });
+  } catch (e) {
+    console.error("LOGIN ERROR:", e);
+    return res.status(500).json({ error: "erro interno" });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`API rodando na porta ${PORT}`);
