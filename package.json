@@ -2,13 +2,16 @@
   "name": "mercado-negro-priston-api",
   "version": "1.0.0",
   "description": "API Mercado Negro Priston",
-  "type": "module",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^5.2.1",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
     "pg": "^8.11.5"
   }
 }
