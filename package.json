@@ -1,6 +1,7 @@
 {
   "name": "mercado-negro-priston-api",
   "version": "1.0.0",
+  "description": "API do Mercado Negro Priston",
   "type": "module",
   "main": "server.js",
   "scripts": {
