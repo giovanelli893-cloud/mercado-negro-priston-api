@@ -1,7 +1,6 @@
-const express = require("express");
+import express from "express";
 
 const app = express();
-
 app.use(express.json());
 
 app.get("/health", (req, res) => {
@@ -10,5 +9,5 @@ app.get("/health", (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Mercado Negro Priston API rodando na porta", PORT);
+  console.log("API rodando na porta", PORT);
 });
