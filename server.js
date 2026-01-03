@@ -48,6 +48,18 @@ function normalizeUsername(u) {
   return String(u || "").trim();
 }
 
+// -------------------- limpeza automática (30 dias) --------------------
+let lastCleanupAt = 0;
+async function cleanupExpiredAds() {
+  const now = Date.now();
+  // no máximo 1x por minuto, pra não martelar o banco
+  if (now - lastCleanupAt < 60_000) return;
+  lastCleanupAt = now;
+
+  // apaga anúncios com mais de 30 dias
+  await pool.query(`delete from ad where created_at < (now() - interval '30 days')`);
+}
+
 // -------------------- health --------------------
 app.get("/", (req, res) => res.status(200).send("OK"));
 
@@ -61,7 +73,6 @@ app.get("/health", async (req, res) => {
 });
 
 // -------------------- auth --------------------
-// POST /auth/register  { username, password }
 app.post("/auth/register", async (req, res) => {
   try {
     const username = normalizeUsername(req.body?.username);
@@ -74,7 +85,10 @@ app.post("/auth/register", async (req, res) => {
       return res.status(400).json({ error: "password_too_short" });
     }
 
-    const exists = await pool.query("select 1 from app_user where username = $1 limit 1", [username]);
+    const exists = await pool.query(
+      "select 1 from app_user where username = $1 limit 1",
+      [username]
+    );
     if (exists.rowCount > 0) {
       return res.status(409).json({ error: "username_taken" });
     }
@@ -96,7 +110,6 @@ app.post("/auth/register", async (req, res) => {
   }
 });
 
-// POST /auth/login { username, password }
 app.post("/auth/login", async (req, res) => {
   try {
     const username = normalizeUsername(req.body?.username);
@@ -119,7 +132,6 @@ app.post("/auth/login", async (req, res) => {
   }
 });
 
-// GET /me (precisa token)
 app.get("/me", authMiddleware, async (req, res) => {
   try {
     const r = await pool.query(
@@ -134,9 +146,11 @@ app.get("/me", authMiddleware, async (req, res) => {
 });
 
 // -------------------- ads --------------------
-// POST /ads  (precisa token)  -> INSERE NAS COLUNAS DA TABELA "ad" (SEM json stats)
+// criar anúncio (precisa token)
 app.post("/ads", authMiddleware, async (req, res) => {
   try {
+    await cleanupExpiredAds();
+
     const b = req.body || {};
 
     const required = [
@@ -156,17 +170,10 @@ app.post("/ads", authMiddleware, async (req, res) => {
     const stats = b.stats && typeof b.stats === "object" ? b.stats : {};
     const observation = String(b.observation || "").trim();
 
-    // garante que o dono existe e pega username correto do banco
+    // pega username do dono (garante que existe)
     const u = await pool.query("select username from app_user where id = $1 limit 1", [req.user.sub]);
     if (u.rowCount === 0) return res.status(401).json({ error: "invalid_user" });
     const ownerUsername = u.rows[0].username;
-
-    // ints quando fizer sentido
-    const paMin = stats.pa_min ?? null;
-    const paMax = stats.pa_max ?? null;
-    const criticoPct = stats.critico_pct ?? null;
-    const bloqueioPct = stats.bloqueio_pct ?? null;
-    const criticoAdicionalPct = stats.critico_adicional_pct ?? null;
 
     const ins = await pool.query(
       `insert into ad (
@@ -176,7 +183,6 @@ app.post("/ads", authMiddleware, async (req, res) => {
         contact_type, contact_handle,
         observation,
         pa_min, pa_max,
-
         vel_arma, alcance, critico_pct, taxa_ataque, limite_pocoes, bloqueio_pct, bonus,
         regen_res, regen_hp, regen_mp,
         hp_adicional, taxa_defesa, absorcao, velocidade, mp_adicional,
@@ -191,7 +197,6 @@ app.post("/ads", authMiddleware, async (req, res) => {
         $7,$8,
         $9,
         $10,$11,
-
         $12,$13,$14,$15,$16,$17,$18,
         $19,$20,$21,
         $22,$23,$24,$25,$26,
@@ -202,25 +207,23 @@ app.post("/ads", authMiddleware, async (req, res) => {
       ) returning id, created_at`,
       [
         req.user.sub, ownerUsername,
-
         String(b.image_filename).trim(),
         String(b.item_title).trim(),
         String(b.item_category).trim(),
         String(b.character_category).trim(),
-
         String(b.contact_type).trim(),
         String(b.contact_handle).trim(),
-
         observation,
 
-        paMin, paMax,
+        stats.pa_min ?? null,
+        stats.pa_max ?? null,
 
         stats.vel_arma ?? null,
         stats.alcance ?? null,
-        criticoPct,
+        stats.critico_pct ?? null,
         stats.taxa_ataque ?? null,
         stats.limite_pocoes ?? null,
-        bloqueioPct,
+        stats.bloqueio_pct ?? null,
         stats.bonus ?? null,
 
         stats.regen_res ?? null,
@@ -247,7 +250,7 @@ app.post("/ads", authMiddleware, async (req, res) => {
 
         stats.spec_atq_spd1 ?? null,
         stats.p_atq_adicional_lv ?? null,
-        criticoAdicionalPct,
+        stats.critico_adicional_pct ?? null,
         stats.taxa_atq_ad_lv ?? null,
         stats.def_adicional ?? null,
         stats.abs_adicional ?? null,
@@ -262,19 +265,20 @@ app.post("/ads", authMiddleware, async (req, res) => {
       ]
     );
 
-    return res.status(201).json(ins.rows[0]);
+    return res.status(201).json({ id: ins.rows[0].id, created_at: ins.rows[0].created_at });
   } catch (e) {
     return res.status(500).json({ error: "server_error", detail: String(e.message || e) });
   }
 });
 
-// GET /ads  (listar anúncios + filtros)
+// listar anúncios (público)
 app.get("/ads", async (req, res) => {
   try {
+    await cleanupExpiredAds();
+
     const q = String(req.query.q || "").trim();
     const item_category = String(req.query.item_category || "").trim();
     const character_category = String(req.query.character_category || "").trim();
-
     const page = Math.max(1, parseInt(req.query.page || "1", 10));
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || "20", 10)));
     const offset = (page - 1) * limit;
@@ -284,8 +288,7 @@ app.get("/ads", async (req, res) => {
 
     if (q) {
       params.push(`%${q}%`);
-      const p = params.length;
-      where.push(`(item_title ilike $${p} OR observation ilike $${p} OR owner_username ilike $${p})`);
+      where.push(`(item_title ilike $${params.length} OR observation ilike $${params.length} OR owner_username ilike $${params.length})`);
     }
     if (item_category) {
       params.push(item_category);
@@ -298,7 +301,10 @@ app.get("/ads", async (req, res) => {
 
     const whereSql = where.length ? `where ${where.join(" and ")}` : "";
 
-    const totalR = await pool.query(`select count(*)::int as total from ad ${whereSql}`, params);
+    const totalR = await pool.query(
+      `select count(*)::int as total from ad ${whereSql}`,
+      params
+    );
 
     params.push(limit);
     params.push(offset);
@@ -314,7 +320,6 @@ app.get("/ads", async (req, res) => {
         contact_type,
         contact_handle,
         observation,
-
         pa_min, pa_max,
         vel_arma, alcance, critico_pct, taxa_ataque, limite_pocoes, bloqueio_pct, bonus,
         regen_res, regen_hp, regen_mp,
@@ -323,7 +328,6 @@ app.get("/ads", async (req, res) => {
         nivel_necessario, forca_necessaria, inteligencia_necessaria, talento_necessario, agilidade_necessaria,
         spec_atq_spd1, p_atq_adicional_lv, critico_adicional_pct, taxa_atq_ad_lv, def_adicional, abs_adicional, vel_adicional, spec_atq_spd2,
         regen_mp2, spec_alcance, spec_rng, bonus_magico, spec_regen_mp,
-
         created_at
       from ad
       ${whereSql}
@@ -336,45 +340,20 @@ app.get("/ads", async (req, res) => {
       total: totalR.rows[0].total,
       page,
       limit,
-      items: listR.rows,
+      items: listR.rows
     });
   } catch (e) {
     return res.status(500).json({ error: "server_error", detail: String(e.message || e) });
   }
 });
-// GET /ads/:id  (detalhe do anúncio)
+
+// detalhes do anúncio por id (público)
 app.get("/ads/:id", async (req, res) => {
   try {
+    await cleanupExpiredAds();
+
     const id = String(req.params.id || "").trim();
-    if (!id) return res.status(400).json({ error: "id_required" });
-
-    const r = await pool.query(
-      `select
-        id,
-        owner_username,
-        image_filename,
-        item_title,
-        item_category,
-        character_category,
-        contact_type,
-        contact_handle,
-        observation,
-        pa_min, pa_max,
-        vel_arma, alcance, critico_pct, taxa_ataque, limite_pocoes, bloqueio_pct, bonus,
-        regen_res, regen_hp, regen_mp,
-        hp_adicional, taxa_defesa, absorcao, velocidade, mp_adicional,
-        res_organica, res_fogo, res_gelo, res_raio, res_veneno,
-        nivel_necessario, forca_necessaria, inteligencia_necessaria, talento_necessario, agilidade_necessaria,
-        spec_atq_spd1, p_atq_adicional_lv, critico_adicional_pct, taxa_atq_ad_lv,
-        def_adicional, abs_adicional, vel_adicional, spec_atq_spd2,
-        regen_mp2, spec_alcance, spec_rng, bonus_magico, spec_regen_mp,
-        created_at
-      from ad
-      where id = $1
-      limit 1`,
-      [id]
-    );
-
+    const r = await pool.query(`select * from ad where id = $1 limit 1`, [id]);
     if (r.rowCount === 0) return res.status(404).json({ error: "not_found" });
     return res.json(r.rows[0]);
   } catch (e) {
