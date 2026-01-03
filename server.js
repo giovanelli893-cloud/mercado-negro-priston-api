@@ -74,10 +74,7 @@ app.post("/auth/register", async (req, res) => {
       return res.status(400).json({ error: "password_too_short" });
     }
 
-    const exists = await pool.query(
-      "select 1 from app_user where username = $1 limit 1",
-      [username]
-    );
+    const exists = await pool.query("select 1 from app_user where username = $1 limit 1", [username]);
     if (exists.rowCount > 0) {
       return res.status(409).json({ error: "username_taken" });
     }
@@ -137,12 +134,11 @@ app.get("/me", authMiddleware, async (req, res) => {
 });
 
 // -------------------- ads --------------------
-// POST /ads  (precisa token)
+// POST /ads  (precisa token)  -> INSERE NAS COLUNAS DA TABELA "ad" (SEM json stats)
 app.post("/ads", authMiddleware, async (req, res) => {
   try {
     const b = req.body || {};
 
-    // Obrigatórios (batendo com sua tabela "ad")
     const required = [
       "image_filename",
       "item_title",
@@ -151,7 +147,6 @@ app.post("/ads", authMiddleware, async (req, res) => {
       "contact_type",
       "contact_handle",
     ];
-
     for (const k of required) {
       if (!b[k] || String(b[k]).trim() === "") {
         return res.status(400).json({ error: `missing_${k}` });
@@ -161,12 +156,12 @@ app.post("/ads", authMiddleware, async (req, res) => {
     const stats = b.stats && typeof b.stats === "object" ? b.stats : {};
     const observation = String(b.observation || "").trim();
 
-    // pega username do dono
+    // garante que o dono existe e pega username correto do banco
     const u = await pool.query("select username from app_user where id = $1 limit 1", [req.user.sub]);
     if (u.rowCount === 0) return res.status(401).json({ error: "invalid_user" });
     const ownerUsername = u.rows[0].username;
 
-    // Mapeia stats (vem como json do app) -> colunas da tabela "ad"
+    // ints quando fizer sentido
     const paMin = stats.pa_min ?? null;
     const paMax = stats.pa_max ?? null;
     const criticoPct = stats.critico_pct ?? null;
@@ -181,6 +176,7 @@ app.post("/ads", authMiddleware, async (req, res) => {
         contact_type, contact_handle,
         observation,
         pa_min, pa_max,
+
         vel_arma, alcance, critico_pct, taxa_ataque, limite_pocoes, bloqueio_pct, bonus,
         regen_res, regen_hp, regen_mp,
         hp_adicional, taxa_defesa, absorcao, velocidade, mp_adicional,
@@ -195,6 +191,7 @@ app.post("/ads", authMiddleware, async (req, res) => {
         $7,$8,
         $9,
         $10,$11,
+
         $12,$13,$14,$15,$16,$17,$18,
         $19,$20,$21,
         $22,$23,$24,$25,$26,
@@ -205,12 +202,15 @@ app.post("/ads", authMiddleware, async (req, res) => {
       ) returning id, created_at`,
       [
         req.user.sub, ownerUsername,
+
         String(b.image_filename).trim(),
         String(b.item_title).trim(),
         String(b.item_category).trim(),
         String(b.character_category).trim(),
+
         String(b.contact_type).trim(),
         String(b.contact_handle).trim(),
+
         observation,
 
         paMin, paMax,
@@ -262,74 +262,19 @@ app.post("/ads", authMiddleware, async (req, res) => {
       ]
     );
 
-    return res.status(201).json({ id: ins.rows[0].id, created_at: ins.rows[0].created_at });
+    return res.status(201).json(ins.rows[0]);
   } catch (e) {
     return res.status(500).json({ error: "server_error", detail: String(e.message || e) });
   }
 });
-// =========================
-// ADS
-// =========================
 
-// POST /ads  (criar anúncio)
-app.post("/ads", authMiddleware, async (req, res) => {
-  try {
-    const {
-      item_title,
-      image_filename,
-      item_category,
-      character_category,
-      contact_type,
-      contact_handle,
-      observation,
-      stats
-    } = req.body;
-
-    if (!item_title || !image_filename || !item_category || !character_category) {
-      return res.status(400).json({ error: "dados obrigatórios faltando" });
-    }
-
-    const result = await pool.query(
-      `insert into ad (
-        owner_user_id,
-        owner_username,
-        image_filename,
-        item_title,
-        item_category,
-        character_category,
-        contact_type,
-        contact_handle,
-        observation,
-        stats
-      )
-      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-      returning id, created_at`,
-      [
-        req.user.sub,
-        req.user.username,
-        image_filename,
-        item_title,
-        item_category,
-        character_category,
-        contact_type,
-        contact_handle,
-        observation || "",
-        stats || {}
-      ]
-    );
-
-    return res.status(201).json(result.rows[0]);
-  } catch (e) {
-    console.error("CREATE AD ERROR:", e);
-    return res.status(500).json({ error: "erro ao criar anúncio" });
-  }
-});
-// GET /ads  (listar anúncios com filtros simples)
+// GET /ads  (listar anúncios + filtros)
 app.get("/ads", async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
     const item_category = String(req.query.item_category || "").trim();
     const character_category = String(req.query.character_category || "").trim();
+
     const page = Math.max(1, parseInt(req.query.page || "1", 10));
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || "20", 10)));
     const offset = (page - 1) * limit;
@@ -339,7 +284,8 @@ app.get("/ads", async (req, res) => {
 
     if (q) {
       params.push(`%${q}%`);
-      where.push(`(item_title ilike $${params.length} OR observation ilike $${params.length} OR owner_username ilike $${params.length})`);
+      const p = params.length;
+      where.push(`(item_title ilike $${p} OR observation ilike $${p} OR owner_username ilike $${p})`);
     }
     if (item_category) {
       params.push(item_category);
@@ -352,13 +298,8 @@ app.get("/ads", async (req, res) => {
 
     const whereSql = where.length ? `where ${where.join(" and ")}` : "";
 
-    // total
-    const totalR = await pool.query(
-      `select count(*)::int as total from ad ${whereSql}`,
-      params
-    );
+    const totalR = await pool.query(`select count(*)::int as total from ad ${whereSql}`, params);
 
-    // list
     params.push(limit);
     params.push(offset);
 
@@ -373,7 +314,16 @@ app.get("/ads", async (req, res) => {
         contact_type,
         contact_handle,
         observation,
-        stats,
+
+        pa_min, pa_max,
+        vel_arma, alcance, critico_pct, taxa_ataque, limite_pocoes, bloqueio_pct, bonus,
+        regen_res, regen_hp, regen_mp,
+        hp_adicional, taxa_defesa, absorcao, velocidade, mp_adicional,
+        res_organica, res_fogo, res_gelo, res_raio, res_veneno,
+        nivel_necessario, forca_necessaria, inteligencia_necessaria, talento_necessario, agilidade_necessaria,
+        spec_atq_spd1, p_atq_adicional_lv, critico_adicional_pct, taxa_atq_ad_lv, def_adicional, abs_adicional, vel_adicional, spec_atq_spd2,
+        regen_mp2, spec_alcance, spec_rng, bonus_magico, spec_regen_mp,
+
         created_at
       from ad
       ${whereSql}
@@ -386,11 +336,10 @@ app.get("/ads", async (req, res) => {
       total: totalR.rows[0].total,
       page,
       limit,
-      items: listR.rows
+      items: listR.rows,
     });
   } catch (e) {
-    console.error("LIST ADS ERROR:", e);
-    return res.status(500).json({ error: "erro ao listar anúncios" });
+    return res.status(500).json({ error: "server_error", detail: String(e.message || e) });
   }
 });
 
