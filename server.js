@@ -267,6 +267,63 @@ app.post("/ads", authMiddleware, async (req, res) => {
     return res.status(500).json({ error: "server_error", detail: String(e.message || e) });
   }
 });
+// =========================
+// ADS
+// =========================
+
+// POST /ads  (criar anúncio)
+app.post("/ads", authMiddleware, async (req, res) => {
+  try {
+    const {
+      item_title,
+      image_filename,
+      item_category,
+      character_category,
+      contact_type,
+      contact_handle,
+      observation,
+      stats
+    } = req.body;
+
+    if (!item_title || !image_filename || !item_category || !character_category) {
+      return res.status(400).json({ error: "dados obrigatórios faltando" });
+    }
+
+    const result = await pool.query(
+      `insert into ad (
+        owner_user_id,
+        owner_username,
+        image_filename,
+        item_title,
+        item_category,
+        character_category,
+        contact_type,
+        contact_handle,
+        observation,
+        stats
+      )
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      returning id, created_at`,
+      [
+        req.user.sub,
+        req.user.username,
+        image_filename,
+        item_title,
+        item_category,
+        character_category,
+        contact_type,
+        contact_handle,
+        observation || "",
+        stats || {}
+      ]
+    );
+
+    return res.status(201).json(result.rows[0]);
+  } catch (e) {
+    console.error("CREATE AD ERROR:", e);
+    return res.status(500).json({ error: "erro ao criar anúncio" });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`API rodando na porta ${PORT}`);
