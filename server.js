@@ -324,6 +324,75 @@ app.post("/ads", authMiddleware, async (req, res) => {
     return res.status(500).json({ error: "erro ao criar anúncio" });
   }
 });
+// GET /ads  (listar anúncios com filtros simples)
+app.get("/ads", async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    const item_category = String(req.query.item_category || "").trim();
+    const character_category = String(req.query.character_category || "").trim();
+    const page = Math.max(1, parseInt(req.query.page || "1", 10));
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || "20", 10)));
+    const offset = (page - 1) * limit;
+
+    const where = [];
+    const params = [];
+
+    if (q) {
+      params.push(`%${q}%`);
+      where.push(`(item_title ilike $${params.length} OR observation ilike $${params.length} OR owner_username ilike $${params.length})`);
+    }
+    if (item_category) {
+      params.push(item_category);
+      where.push(`item_category = $${params.length}`);
+    }
+    if (character_category) {
+      params.push(character_category);
+      where.push(`character_category = $${params.length}`);
+    }
+
+    const whereSql = where.length ? `where ${where.join(" and ")}` : "";
+
+    // total
+    const totalR = await pool.query(
+      `select count(*)::int as total from ad ${whereSql}`,
+      params
+    );
+
+    // list
+    params.push(limit);
+    params.push(offset);
+
+    const listR = await pool.query(
+      `select
+        id,
+        owner_username,
+        image_filename,
+        item_title,
+        item_category,
+        character_category,
+        contact_type,
+        contact_handle,
+        observation,
+        stats,
+        created_at
+      from ad
+      ${whereSql}
+      order by created_at desc
+      limit $${params.length - 1} offset $${params.length}`,
+      params
+    );
+
+    return res.json({
+      total: totalR.rows[0].total,
+      page,
+      limit,
+      items: listR.rows
+    });
+  } catch (e) {
+    console.error("LIST ADS ERROR:", e);
+    return res.status(500).json({ error: "erro ao listar anúncios" });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`API rodando na porta ${PORT}`);
