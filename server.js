@@ -342,6 +342,45 @@ app.get("/ads", async (req, res) => {
     return res.status(500).json({ error: "server_error", detail: String(e.message || e) });
   }
 });
+// GET /ads/:id  (detalhe do anúncio)
+app.get("/ads/:id", async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ error: "id_required" });
+
+    const r = await pool.query(
+      `select
+        id,
+        owner_username,
+        image_filename,
+        item_title,
+        item_category,
+        character_category,
+        contact_type,
+        contact_handle,
+        observation,
+        pa_min, pa_max,
+        vel_arma, alcance, critico_pct, taxa_ataque, limite_pocoes, bloqueio_pct, bonus,
+        regen_res, regen_hp, regen_mp,
+        hp_adicional, taxa_defesa, absorcao, velocidade, mp_adicional,
+        res_organica, res_fogo, res_gelo, res_raio, res_veneno,
+        nivel_necessario, forca_necessaria, inteligencia_necessaria, talento_necessario, agilidade_necessaria,
+        spec_atq_spd1, p_atq_adicional_lv, critico_adicional_pct, taxa_atq_ad_lv,
+        def_adicional, abs_adicional, vel_adicional, spec_atq_spd2,
+        regen_mp2, spec_alcance, spec_rng, bonus_magico, spec_regen_mp,
+        created_at
+      from ad
+      where id = $1
+      limit 1`,
+      [id]
+    );
+
+    if (r.rowCount === 0) return res.status(404).json({ error: "not_found" });
+    return res.json(r.rows[0]);
+  } catch (e) {
+    return res.status(500).json({ error: "server_error", detail: String(e.message || e) });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`API rodando na porta ${PORT}`);
